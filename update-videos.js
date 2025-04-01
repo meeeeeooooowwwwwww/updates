@@ -84,9 +84,10 @@ async function getLatestVideoId() {
     try {
         const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT id FROM videos ORDER BY sort_order DESC LIMIT 1;" --json');
         const data = JSON.parse(result);
-        if (data && data.length > 0 && data[0].id) {
-            console.log('[DB] Latest video ID found:', data[0].id);
-            return data[0].id;
+        if (data && data.length > 0 && data[0].results && data[0].results.length > 0) {
+            const latestId = data[0].results[0].id;
+            console.log('[DB] Latest video ID found:', latestId);
+            return latestId;
         }
         console.log('[DB] No videos found in database');
         return null;
@@ -151,14 +152,11 @@ async function scrapeVideos() {
                 // Extract video ID from URL - more robust extraction
                 const videoId = link.split('/').pop().split('.')[0].split('-')[0];
                 
-                // Skip if we've found the latest video
-                if (foundLatestVideo) continue;
-                
                 // If we've found the latest video we've already scraped, stop
                 if (latestVideoId && videoId === latestVideoId) {
                     console.log(`[SCRAPER] Found latest known video: ${title} (ID: ${videoId})`);
                     foundLatestVideo = true;
-                    continue;
+                    break; // Stop processing after finding the latest video
                 }
 
                 // Check if video already exists in database
@@ -177,6 +175,12 @@ async function scrapeVideos() {
                     platform_id: 'warroom'
                 });
                 console.log(`[SCRAPER] Adding new video: ${title} (ID: ${videoId})`);
+
+                // Limit to 20 new videos
+                if (newVideos.length >= 20) {
+                    console.log('[SCRAPER] Reached maximum of 20 new videos');
+                    break;
+                }
             } catch (error) {
                 console.error('[SCRAPER] Error processing video:', error);
                 continue;
@@ -238,9 +242,6 @@ async function insertNewVideos(videos) {
 (async () => {
     console.log("[START] Beginning video update process...");
     try {
-        const latestKnownId = await fetchLatestPlatformId();
-        console.log(`[START] Latest known video ID: ${latestKnownId || 'None'}`);
-        
         const newVideos = await scrapeVideos();
         console.log(`[START] Found ${newVideos.length} new videos to insert`);
         

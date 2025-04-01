@@ -2,21 +2,33 @@ name: Scrape Latest Rumble Videos
 
 on:
   schedule:
-    # Runs at 13:00, 17:00, 21:00, and 01:00 UTC (approx 8am, 12pm, 4pm, 8pm CT - adjust as needed)
-    - cron: '0 13,17,21,1 * * *'
+    # Runs at 8:00 AM and 8:00 PM UTC
+    - cron: '0 8,20 * * *'
   workflow_dispatch: # Allows manual triggering from GitHub UI
+
+# Prevent multiple runs from happening at the same time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # Prevent hanging jobs
+    
+    # Add environment variables that are safe to expose
+    env:
+      DB_NAME: 'nataliewinters-db' # This is safe to expose as it's just a name
+    
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Use latest version
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4 # Use latest version
+        uses: actions/setup-node@v4
         with:
-          node-version: '18' # Or your preferred Node version >= 18
+          node-version: '20'
+          cache: 'npm' # Enable npm caching for faster installs
 
       # Install dependencies needed for Puppeteer in headless Linux
       - name: Install OS Dependencies
@@ -26,18 +38,46 @@ jobs:
 
       # Install project dependencies (including Puppeteer)
       - name: Install Node Dependencies
-        run: npm install
+        run: npm ci # Use ci instead of install for more reliable builds
 
       # Install Wrangler globally for command-line execution
       - name: Install Wrangler
         run: sudo npm install -g wrangler
 
+      # Verify secrets are set
+      - name: Verify Secrets
+        run: |
+          if [ -z "${{ secrets.CF_API_TOKEN }}" ]; then
+            echo "Error: CF_API_TOKEN is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.CF_ACCOUNT_ID }}" ]; then
+            echo "Error: CF_ACCOUNT_ID is not set"
+            exit 1
+          fi
+          echo "✅ All required secrets are set"
+
       - name: Run Scraper and Update Script
         env:
-          # Pass Cloudflare credentials from GitHub Secrets
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          # Note: DB name is hardcoded in the script currently, or could be passed too
         run: node update-videos.js
 
-      # Optional: Add error handling/notifications here if needed
+      # Add error notifications
+      - name: Notify on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo, run_id } = context.repo;
+            const run_url = `https://github.com/${owner}/${repo}/actions/runs/${run_id}`;
+            const message = `❌ Video scraper failed! Check the logs at: ${run_url}`;
+            
+            // Create an issue to track the failure
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title: 'Video Scraper Failed',
+              body: message,
+              labels: ['bug', 'automation']
+            });

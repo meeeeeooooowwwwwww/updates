@@ -18,14 +18,30 @@ sql-imports/
 temp_output/
 cj-feed-download.zip
 cj-feed-extracted/
+scraped_videos.json
+warroom_videos.json
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# SQL Files
+*.sql
+import_batch_*.sql
+sql_scripts/
+
+# Scripts
+scripts/
+*.js
+!update-videos.js
+*.py
+*.sh
 
 # Logs
 *.log
 import_log.txt
+mine-videos.log
+mine-videos-sort-order.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
 
 # IDE specific
 .vscode/
@@ -40,6 +56,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Ignore specific moved directories
-scripts/
-sql_scripts/ 
+# Keep only essential GitHub Action files
+!.github/
+!.github/workflows/
+!.github/workflows/scrape_videos.yml 

@@ -11,6 +11,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Add permissions for creating issues
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   scrape:
     runs-on: ubuntu-latest

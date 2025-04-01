@@ -1,0 +1,13 @@
+# IDE/Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Other specific files
+d1-import-products.json 

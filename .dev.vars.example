@@ -1,0 +1,15 @@
+# CJ API Credentials
+CJ_USERNAME="your_cj_username"
+CJ_PASSWORD="your_cj_password"
+CJ_FEED_URL="your_cj_feed_url"
+
+# SFTP Credentials for Product Feed
+CJ_SFTP_HOST="datatransfer.cj.com"
+CJ_SFTP_PORT="22"
+CJ_SFTP_USER="your_sftp_username"
+CJ_SFTP_PASS="your_sftp_password"
+CJ_SFTP_REMOTE_PATH="/outgoing/productcatalog"
+
+# D1 Database Configuration
+D1_DATABASE_ID="your_d1_database_id"
+D1_DATABASE_NAME="your_database_name" 

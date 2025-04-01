@@ -1,22 +1,23 @@
 {
-  "name": "this",
+  "name": "nataliewinters-updates",
   "version": "1.0.0",
-  "description": "This Website",
-  "main": "server.js",
+  "description": "Update scripts for Natalie Winters website",
+  "main": "index.js",
   "scripts": {
-    "start": "node scripts/server.js",
-    "dev": "nodemon scripts/server.js"
+    "update-products": "node scripts/transform-cj-products.js",
+    "import-products": "node scripts/import-to-d1.js",
+    "prepare-import": "node scripts/prepare-d1-import.js",
+    "shuffle-imports": "node scripts/shuffle-import-files.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "jsonstream-next": "^3.0.0"
+    "dotenv": "^16.4.1",
+    "ssh2-sftp-client": "^9.1.1",
+    "wrangler": "^3.28.1"
   },
   "devDependencies": {
     "adm-zip": "^0.5.16",
     "csv-parse": "^5.6.0",
-    "dotenv": "^16.4.7",
     "node-fetch": "^2.7.0",
-    "nodemon": "^3.0.2",
-    "ssh2-sftp-client": "^12.0.0"
+    "nodemon": "^3.0.2"
   }
 }

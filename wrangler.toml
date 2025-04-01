@@ -1,0 +1,8 @@
+name = "nataliewinters-updates"
+main = "update-videos.js"
+compatibility_date = "2024-04-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nataliewinters-db"
+database_id = "67d2b960-fbe6-4451-b837-f88de68d2036" 

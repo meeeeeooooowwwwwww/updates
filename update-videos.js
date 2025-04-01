@@ -79,101 +79,102 @@ async function fetchMaxSortOrder() {
     }
 }
 
-async function scrapeLatestVideos(latestKnownPlatformId) {
-    console.log('[SCRAPER] Launching browser for scraping...');
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'] // Necessary for running in GitHub Actions/Linux
-    });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+async function getLatestVideoId() {
+    console.log('[DB] Fetching latest video ID from database...');
+    try {
+        const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT id FROM videos ORDER BY sort_order DESC LIMIT 1;" --json');
+        const data = JSON.parse(result);
+        if (data && data.length > 0 && data[0].id) {
+            console.log('[DB] Latest video ID found:', data[0].id);
+            return data[0].id;
+        }
+        console.log('[DB] No videos found in database');
+        return null;
+    } catch (error) {
+        console.error('[DB] Error fetching latest video ID:', error);
+        return null;
+    }
+}
 
-    const videosToInsert = [];
-    const page1Url = `${TARGET_URL_BASE}/videos`; // Always start checking from page 1
+async function scrapeVideos() {
+    console.log('[START] Beginning video update process...');
+    
+    // Get the latest video ID from the database
+    const latestVideoId = await getLatestVideoId();
+    console.log('[START] Latest known video ID:', latestVideoId);
+
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
 
     try {
-        console.log(`[SCRAPER] Navigating to ${page1Url}...`);
-        await page.goto(page1Url, { waitUntil: 'networkidle2', timeout: PAGE_NAV_TIMEOUT });
-        console.log("[SCRAPER] Page loaded. Waiting for videos...");
-        await page.waitForSelector(VIDEO_LIST_ITEM_SELECTOR, { timeout: SELECTOR_WAIT_TIMEOUT });
-        console.log("[SCRAPER] Videos found.");
+        const page = await browser.newPage();
+        console.log('[SCRAPER] Launching browser for scraping...');
 
-        const videosOnPage = await page.$$eval(
-            VIDEO_LIST_ITEM_SELECTOR,
-             (items, primaryAncestorSel, fallbackAncestorSel, timeViewsSel, timeContainerSel, timeTitleSel) => {
-                // This $$eval function extracts data but *doesn't* have access to latestKnownPlatformId
-                // It just returns all data from page 1
-                return items.map(item => {
-                    const img = item.querySelector('img.thumbnail__image');
-                    const linkElement = item.querySelector('a.videostream__link.link'); // Rename to avoid conflict
-                    const title = img ? img.getAttribute('alt') : null;
-                    const thumbnail = img ? img.getAttribute('src') : null;
-                    const videoPath = linkElement ? linkElement.getAttribute('href') : null; // Use renamed variable
-                    const link = videoPath ? `https://rumble.com${videoPath}` : null; // Construct full link early
+        // Navigate to the page
+        console.log('[SCRAPER] Navigating to', TARGET_URL_BASE);
+        await page.goto(TARGET_URL_BASE, { waitUntil: 'networkidle0' });
+        console.log('[SCRAPER] Page loaded. Waiting for videos...');
 
-                    // Extract platform_id here for comparison later
-                    const platformIdMatch = link ? link.match(/rumble\.com\/([a-z0-9]+)-/) : null;
-                    const platform_id = platformIdMatch ? platformIdMatch[1] : (link ? link.split('/').pop().split('.')[0] : null);
+        // Wait for videos to load
+        await page.waitForSelector('ol.thumbnail__grid', { timeout: 30000 });
+        console.log('[SCRAPER] Videos found.');
 
+        // Get all video elements
+        const videoElements = await page.$$('ol.thumbnail__grid div.thumbnail__thumb');
+        console.log(`[SCRAPER] Found ${videoElements.length} videos on page 1.`);
 
-                    // We don't need date extraction here as we use fake dates for inserts
-                    // based on order relative to the known latest video.
+        const newVideos = [];
+        let foundLatestVideo = false;
 
-                    if (title && link && platform_id) {
-                        return {
-                            title: title.trim(),
-                            link: link,
-                            thumbnail: thumbnail,
-                            platform: 'rumble', // Hardcoded
-                            platform_id: platform_id,
-                            source_type: 'warroom' // Hardcoded
-                        };
-                    }
-                    return null;
-                }).filter(video => video !== null);
-            },
-            OVERALL_VIDEO_ENTRY_SELECTOR_PRIMARY,
-            OVERALL_VIDEO_ENTRY_SELECTOR_FALLBACK,
-            TIME_VIEWS_CONTAINER_SELECTOR,
-            TIME_CONTAINER_SELECTOR,
-            TIME_TITLE_SELECTOR
-        );
+        // Process each video
+        for (const video of videoElements) {
+            try {
+                const linkElement = await video.$('a.videostream__link.link');
+                if (!linkElement) continue;
 
-        console.log(`[SCRAPER] Found ${videosOnPage.length} videos on page 1.`);
+                const link = await linkElement.evaluate(el => el.href);
+                const title = await linkElement.evaluate(el => el.textContent.trim());
+                
+                // Extract video ID from URL
+                const videoId = link.split('/').pop().split('.')[0];
+                
+                // If we've found the latest video we've already scraped, stop
+                if (latestVideoId && videoId === latestVideoId) {
+                    console.log(`[SCRAPER] Found latest known video: ${title} (ID: ${videoId})`);
+                    foundLatestVideo = true;
+                    break;
+                }
 
-        // Process scraped videos to find new ones
-        let newVideosCount = 0;
-        for (const video of videosOnPage) {
-            if (video.platform_id === latestKnownPlatformId) {
-                console.log(`[SCRAPER] Found latest known video (ID: ${latestKnownPlatformId}). Stopping.`);
-                break; // Stop adding videos once we hit one we already have
+                // Add new video to our list
+                newVideos.push({
+                    id: videoId,
+                    title: title,
+                    link: link,
+                    publish_date: new Date().toISOString().split('T')[0], // Using current date for now
+                    platform_id: 'warroom'
+                });
+                console.log(`[SCRAPER] Adding new video: ${title} (ID: ${videoId})`);
+            } catch (error) {
+                console.error('[SCRAPER] Error processing video:', error);
+                continue;
             }
-            console.log(`[SCRAPER] Adding new video: ${video.title} (ID: ${video.platform_id})`);
-            videosToInsert.push(video);
-            newVideosCount++;
         }
 
-        console.log(`[SCRAPER] Total new videos found: ${newVideosCount}`);
-
-        // If we went through all videos on page 1 and didn't find the latest known one,
-        // it means there are >1 page of new videos OR the latest known video expired.
-        // For simplicity, we are currently only processing Page 1.
-        // Add logic here later to navigate to page 2 if needed.
-        if (videosToInsert.length === videosOnPage.length && latestKnownPlatformId !== null) {
-             console.warn("[SCRAPER] Processed all videos on page 1 without finding the latest known video. Either >1 page of new videos or latest known video is very old.");
+        if (!foundLatestVideo && latestVideoId) {
+            console.log('[SCRAPER] Processed all videos on page 1 without finding the latest known video. Either >1 page of new videos or latest known video is very old.');
         }
 
-
-    } catch (error) {
-        console.error("[SCRAPER] Error during scraping:", error);
-        // Decide if we should stop or continue without new videos
-    } finally {
         await browser.close();
-        console.log("[SCRAPER] Browser closed.");
-    }
+        console.log('[SCRAPER] Browser closed.');
 
-    return videosToInsert; // Return only the new videos found
+        return newVideos;
+    } catch (error) {
+        console.error('[SCRAPER] Error during scraping:', error);
+        await browser.close();
+        throw error;
+    }
 }
 
 async function insertNewVideos(newVideos) {
@@ -237,7 +238,7 @@ async function insertNewVideos(newVideos) {
         const latestKnownId = await fetchLatestPlatformId();
         console.log(`[START] Latest known video ID: ${latestKnownId || 'None'}`);
         
-        const newVideos = await scrapeLatestVideos(latestKnownId);
+        const newVideos = await scrapeVideos();
         console.log(`[START] Found ${newVideos.length} new videos to insert`);
         
         await insertNewVideos(newVideos);

@@ -82,7 +82,8 @@ async function fetchMaxSortOrder() {
 async function getLatestVideoId() {
     console.log('[DB] Fetching latest video ID from database...');
     try {
-        const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT id FROM videos ORDER BY sort_order DESC LIMIT 1;" --json');
+        // Get the latest video ID based on the ID itself, not sort_order
+        const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT id FROM videos ORDER BY id DESC LIMIT 1;" --json');
         const data = JSON.parse(result);
         if (data && data.length > 0 && data[0].results && data[0].results.length > 0) {
             const latestId = data[0].results[0].id;
@@ -211,7 +212,7 @@ async function insertNewVideos(videos) {
     console.log('[DB] Preparing to insert', videos.length, 'new videos...');
     
     try {
-        // Get the current max sort_order
+        // Get the current max sort_order for maintaining the order
         const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT MAX(sort_order) as max_order FROM videos;" --json');
         const data = JSON.parse(result);
         const maxOrder = data && data.length > 0 ? data[0].max_order : 0;
@@ -220,6 +221,7 @@ async function insertNewVideos(videos) {
         // Generate INSERT statements
         const insertStatements = videos.map((video, index) => {
             const sortOrder = maxOrder + videos.length - index;
+            // Use the video ID as the primary identifier
             return `INSERT INTO videos (id, title, link, publish_date, platform_id, sort_order) VALUES ('${video.id}', '${video.title.replace(/'/g, "''")}', '${video.link.replace(/'/g, "''")}', '${video.publish_date}', '${video.platform_id}', ${sortOrder});`;
         });
 

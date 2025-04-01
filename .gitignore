@@ -10,4 +10,8 @@ __pycache__/
 *.pyo
 
 # Other specific files
-d1-import-products.json 
+d1-import-products.json
+
+# Ignore specific moved directories
+scripts/
+sql_scripts/ 

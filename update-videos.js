@@ -26,62 +26,61 @@ function escapeSqlString(value) {
     return `'${escaped}'`;
 }
 
-// Function to run Wrangler commands
+// Function to run Wrangler commands with logging
 function runWrangler(command) {
-    console.log(`Executing: wrangler ${command}`);
+    console.log(`[WRANGLER] Executing: wrangler ${command}`);
     try {
         // Ensure environment variables for auth are available if needed by wrangler
         // Inherited from GitHub Actions environment
         const output = execSync(`wrangler ${command}`, { encoding: 'utf-8' });
-        console.log("Wrangler output:", output);
+        console.log("[WRANGLER] Command executed successfully");
         return output;
     } catch (error) {
-        console.error("Error executing Wrangler command:", error.stderr || error.stdout || error);
+        console.error("[WRANGLER] Error executing command:", error.stderr || error.stdout || error);
         throw error; // Re-throw to stop the script
     }
 }
 
 async function fetchLatestPlatformId() {
-    console.log("Fetching latest platform_id from database...");
+    console.log("[DB] Fetching latest platform_id from database...");
     try {
         const command = `d1 execute ${DB_NAME} --remote --command "SELECT platform_id FROM ${TABLE_NAME} ORDER BY sort_order DESC LIMIT 1;" --json`;
         const output = runWrangler(command);
         const results = JSON.parse(output);
         if (results && results.length > 0 && results[0].results && results[0].results.length > 0) {
             const latestId = results[0].results[0].platform_id;
-            console.log("Latest platform_id found:", latestId);
+            console.log(`[DB] Latest platform_id found: ${latestId}`);
             return latestId;
         }
-        console.log("No existing videos found or platform_id is null.");
+        console.log("[DB] No existing videos found or platform_id is null.");
         return null;
     } catch (error) {
-        console.error("Failed to fetch latest platform_id. Assuming no existing videos.", error);
+        console.error("[DB] Failed to fetch latest platform_id:", error);
         return null; // Proceed as if DB is empty on error
     }
 }
 
 async function fetchMaxSortOrder() {
-    console.log("Fetching max sort_order from database...");
-     try {
+    console.log("[DB] Fetching max sort_order from database...");
+    try {
         const command = `d1 execute ${DB_NAME} --remote --command "SELECT MAX(sort_order) as max_order FROM ${TABLE_NAME};" --json`;
         const output = runWrangler(command);
         const results = JSON.parse(output);
-         if (results && results.length > 0 && results[0].results && results[0].results.length > 0 && results[0].results[0].max_order !== null) {
+        if (results && results.length > 0 && results[0].results && results[0].results.length > 0 && results[0].results[0].max_order !== null) {
             const maxOrder = parseInt(results[0].results[0].max_order, 10);
-            console.log("Max sort_order found:", maxOrder);
+            console.log(`[DB] Max sort_order found: ${maxOrder}`);
             return maxOrder;
         }
-        console.log("No existing videos found or max_order is null.");
+        console.log("[DB] No existing videos found or max_order is null.");
         return 0; // Start from 0 if table is empty or max is null
     } catch (error) {
-        console.error("Failed to fetch max sort_order. Defaulting to 0.", error);
+        console.error("[DB] Failed to fetch max sort_order:", error);
         return 0; // Default to 0 on error
     }
 }
 
-
 async function scrapeLatestVideos(latestKnownPlatformId) {
-    console.log('Launching browser for scraping...');
+    console.log('[SCRAPER] Launching browser for scraping...');
     const browser = await puppeteer.launch({
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'] // Necessary for running in GitHub Actions/Linux
@@ -94,11 +93,11 @@ async function scrapeLatestVideos(latestKnownPlatformId) {
     const page1Url = `${TARGET_URL_BASE}/videos`; // Always start checking from page 1
 
     try {
-        console.log(`Navigating to ${page1Url}...`);
+        console.log(`[SCRAPER] Navigating to ${page1Url}...`);
         await page.goto(page1Url, { waitUntil: 'networkidle2', timeout: PAGE_NAV_TIMEOUT });
-        console.log("Page loaded. Waiting for videos...");
+        console.log("[SCRAPER] Page loaded. Waiting for videos...");
         await page.waitForSelector(VIDEO_LIST_ITEM_SELECTOR, { timeout: SELECTOR_WAIT_TIMEOUT });
-        console.log("Videos found.");
+        console.log("[SCRAPER] Videos found.");
 
         const videosOnPage = await page.$$eval(
             VIDEO_LIST_ITEM_SELECTOR,
@@ -141,33 +140,37 @@ async function scrapeLatestVideos(latestKnownPlatformId) {
             TIME_TITLE_SELECTOR
         );
 
-        console.log(`Scraped ${videosOnPage.length} videos from page 1.`);
+        console.log(`[SCRAPER] Found ${videosOnPage.length} videos on page 1.`);
 
         // Process scraped videos to find new ones
+        let newVideosCount = 0;
         for (const video of videosOnPage) {
             if (video.platform_id === latestKnownPlatformId) {
-                console.log(`Found latest known video (ID: ${latestKnownPlatformId}). Stopping.`);
+                console.log(`[SCRAPER] Found latest known video (ID: ${latestKnownPlatformId}). Stopping.`);
                 break; // Stop adding videos once we hit one we already have
             }
-            console.log(`Adding new video: ${video.title} (ID: ${video.platform_id})`);
+            console.log(`[SCRAPER] Adding new video: ${video.title} (ID: ${video.platform_id})`);
             videosToInsert.push(video);
+            newVideosCount++;
         }
+
+        console.log(`[SCRAPER] Total new videos found: ${newVideosCount}`);
 
         // If we went through all videos on page 1 and didn't find the latest known one,
         // it means there are >1 page of new videos OR the latest known video expired.
         // For simplicity, we are currently only processing Page 1.
         // Add logic here later to navigate to page 2 if needed.
         if (videosToInsert.length === videosOnPage.length && latestKnownPlatformId !== null) {
-             console.warn("Processed all videos on page 1 without finding the latest known video. Either >1 page of new videos or latest known video is very old. Only inserting page 1 videos.");
+             console.warn("[SCRAPER] Processed all videos on page 1 without finding the latest known video. Either >1 page of new videos or latest known video is very old.");
         }
 
 
     } catch (error) {
-        console.error("Error during scraping:", error);
+        console.error("[SCRAPER] Error during scraping:", error);
         // Decide if we should stop or continue without new videos
     } finally {
         await browser.close();
-        console.log("Browser closed.");
+        console.log("[SCRAPER] Browser closed.");
     }
 
     return videosToInsert; // Return only the new videos found
@@ -175,11 +178,11 @@ async function scrapeLatestVideos(latestKnownPlatformId) {
 
 async function insertNewVideos(newVideos) {
     if (!newVideos || newVideos.length === 0) {
-        console.log("No new videos to insert.");
+        console.log("[DB] No new videos to insert.");
         return;
     }
 
-    console.log(`Preparing to insert ${newVideos.length} new videos...`);
+    console.log(`[DB] Preparing to insert ${newVideos.length} new videos...`);
 
     const maxSortOrder = await fetchMaxSortOrder();
     const baseTime = new Date(); // Use current time as base for fake dates
@@ -206,22 +209,22 @@ async function insertNewVideos(newVideos) {
         );
     });
 
-    console.log(`Generated ${sqlStatements.length} INSERT statements.`);
+    console.log(`[DB] Generated ${sqlStatements.length} INSERT statements.`);
 
     try {
         await fs.writeFile(TEMP_SQL_FILE, sqlStatements.join('\n'));
-        console.log(`Wrote INSERT statements to ${TEMP_SQL_FILE}.`);
+        console.log(`[DB] Wrote INSERT statements to ${TEMP_SQL_FILE}.`);
 
         // Execute the SQL file using Wrangler
         runWrangler(`d1 execute ${DB_NAME} --remote --file=${TEMP_SQL_FILE}`);
-        console.log(`Successfully executed ${TEMP_SQL_FILE}.`);
+        console.log(`[DB] Successfully executed ${TEMP_SQL_FILE}.`);
 
         // Clean up the temporary SQL file
         await fs.unlink(TEMP_SQL_FILE);
-        console.log(`Deleted ${TEMP_SQL_FILE}.`);
+        console.log(`[DB] Deleted ${TEMP_SQL_FILE}.`);
 
     } catch (error) {
-        console.error("Error writing SQL file or executing inserts:", error);
+        console.error("[DB] Error writing SQL file or executing inserts:", error);
         // Keep the SQL file for debugging if execution failed?
     }
 }
@@ -229,13 +232,18 @@ async function insertNewVideos(newVideos) {
 
 // --- Main Execution ---
 (async () => {
+    console.log("[START] Beginning video update process...");
     try {
         const latestKnownId = await fetchLatestPlatformId();
+        console.log(`[START] Latest known video ID: ${latestKnownId || 'None'}`);
+        
         const newVideos = await scrapeLatestVideos(latestKnownId);
+        console.log(`[START] Found ${newVideos.length} new videos to insert`);
+        
         await insertNewVideos(newVideos);
-        console.log("Update process finished.");
+        console.log("[START] Update process finished successfully.");
     } catch (error) {
-        console.error("Script failed:", error);
+        console.error("[ERROR] Script failed:", error);
         process.exit(1); // Exit with error code
     }
 })();

@@ -96,6 +96,17 @@ async function getLatestVideoId() {
     }
 }
 
+async function checkVideoExists(videoId) {
+    try {
+        const result = await runWrangler(`d1 execute nataliewinters-db --remote --command "SELECT COUNT(*) as count FROM videos WHERE id = '${videoId}';" --json`);
+        const data = JSON.parse(result);
+        return data && data.length > 0 && data[0].count > 0;
+    } catch (error) {
+        console.error('[DB] Error checking video existence:', error);
+        return false;
+    }
+}
+
 async function scrapeVideos() {
     console.log('[START] Beginning video update process...');
     
@@ -137,14 +148,24 @@ async function scrapeVideos() {
                 const link = await linkElement.evaluate(el => el.href);
                 const title = await linkElement.evaluate(el => el.textContent.trim());
                 
-                // Extract video ID from URL
-                const videoId = link.split('/').pop().split('.')[0];
+                // Extract video ID from URL - more robust extraction
+                const videoId = link.split('/').pop().split('.')[0].split('-')[0];
+                
+                // Skip if we've found the latest video
+                if (foundLatestVideo) continue;
                 
                 // If we've found the latest video we've already scraped, stop
                 if (latestVideoId && videoId === latestVideoId) {
                     console.log(`[SCRAPER] Found latest known video: ${title} (ID: ${videoId})`);
                     foundLatestVideo = true;
-                    break;
+                    continue;
+                }
+
+                // Check if video already exists in database
+                const exists = await checkVideoExists(videoId);
+                if (exists) {
+                    console.log(`[SCRAPER] Video already exists in database: ${title} (ID: ${videoId})`);
+                    continue;
                 }
 
                 // Add new video to our list
@@ -152,7 +173,7 @@ async function scrapeVideos() {
                     id: videoId,
                     title: title,
                     link: link,
-                    publish_date: new Date().toISOString().split('T')[0], // Using current date for now
+                    publish_date: new Date().toISOString().split('T')[0],
                     platform_id: 'warroom'
                 });
                 console.log(`[SCRAPER] Adding new video: ${title} (ID: ${videoId})`);
@@ -177,56 +198,38 @@ async function scrapeVideos() {
     }
 }
 
-async function insertNewVideos(newVideos) {
-    if (!newVideos || newVideos.length === 0) {
-        console.log("[DB] No new videos to insert.");
+async function insertNewVideos(videos) {
+    if (!videos || videos.length === 0) {
+        console.log('[DB] No new videos to insert');
         return;
     }
 
-    console.log(`[DB] Preparing to insert ${newVideos.length} new videos...`);
-
-    const maxSortOrder = await fetchMaxSortOrder();
-    const baseTime = new Date(); // Use current time as base for fake dates
-    const sqlStatements = [];
-
-    // Reverse the array so the oldest of the *new* videos is processed first
-    newVideos.reverse();
-
-    newVideos.forEach((video, index) => {
-        const sort_order = maxSortOrder + index + 1;
-        const fakeTimestamp = new Date(baseTime.getTime() - (index * 1000)); // Oldest new video gets latest fake time
-        const publish_date = fakeTimestamp.toISOString();
-
-        const id = escapeSqlString(`rumble:${video.platform_id}`); // Construct full ID
-        const title = escapeSqlString(video.title);
-        const link = escapeSqlString(video.link);
-        const thumbnail = escapeSqlString(video.thumbnail);
-        const platform = escapeSqlString(video.platform);
-        const platform_id = escapeSqlString(video.platform_id);
-        const source_type = escapeSqlString(video.source_type);
-
-        sqlStatements.push(
-            `INSERT INTO ${TABLE_NAME} (id, title, link, thumbnail, publish_date, platform, platform_id, source_type, sort_order) VALUES (${id}, ${title}, ${link}, ${thumbnail}, '${publish_date}', ${platform}, ${platform_id}, ${source_type}, ${sort_order});`
-        );
-    });
-
-    console.log(`[DB] Generated ${sqlStatements.length} INSERT statements.`);
-
+    console.log('[DB] Preparing to insert', videos.length, 'new videos...');
+    
     try {
-        await fs.writeFile(TEMP_SQL_FILE, sqlStatements.join('\n'));
-        console.log(`[DB] Wrote INSERT statements to ${TEMP_SQL_FILE}.`);
+        // Get the current max sort_order
+        const result = await runWrangler('d1 execute nataliewinters-db --remote --command "SELECT MAX(sort_order) as max_order FROM videos;" --json');
+        const data = JSON.parse(result);
+        const maxOrder = data && data.length > 0 ? data[0].max_order : 0;
+        console.log('[DB] Max sort_order found:', maxOrder);
 
-        // Execute the SQL file using Wrangler
-        runWrangler(`d1 execute ${DB_NAME} --remote --file=${TEMP_SQL_FILE}`);
-        console.log(`[DB] Successfully executed ${TEMP_SQL_FILE}.`);
+        // Generate INSERT statements
+        const insertStatements = videos.map((video, index) => {
+            const sortOrder = maxOrder + videos.length - index;
+            return `INSERT INTO videos (id, title, link, publish_date, platform_id, sort_order) VALUES ('${video.id}', '${video.title.replace(/'/g, "''")}', '${video.link.replace(/'/g, "''")}', '${video.publish_date}', '${video.platform_id}', ${sortOrder});`;
+        });
 
-        // Clean up the temporary SQL file
-        await fs.unlink(TEMP_SQL_FILE);
-        console.log(`[DB] Deleted ${TEMP_SQL_FILE}.`);
+        // Write to SQL file
+        fs.writeFileSync('new_videos.sql', insertStatements.join('\n'));
+        console.log('[DB] Generated', insertStatements.length, 'INSERT statements.');
+        console.log('[DB] Wrote INSERT statements to new_videos.sql');
 
+        // Execute the SQL file
+        await runWrangler('d1 execute nataliewinters-db --remote --file=new_videos.sql');
+        console.log('[DB] Successfully inserted', videos.length, 'new videos');
     } catch (error) {
-        console.error("[DB] Error writing SQL file or executing inserts:", error);
-        // Keep the SQL file for debugging if execution failed?
+        console.error('[DB] Error writing SQL file or executing inserts:', error);
+        throw error;
     }
 }
 
